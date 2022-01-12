@@ -201,11 +201,29 @@ bool isVisible(double den, double num, double __TE__, double __TL__)
     }
     return true;
 }
-bool isInView(const Camera *camera, Vec4 &v0, Vec4 &v1)
+Color minusc(const Color &c1, const Color &c2)
+{
+    return Color(c1.r - c2.r, c1.g - c2.g, c1.b - c2.b);
+}
+Color addc(const Color &c1, const Color &c2)
+{
+    return Color(c1.r + c2.r, c1.g + c2.g, c1.b + c2.b);
+}
+Color multc(const Color &c1, int scalar)
+{
+    return Color(c1.r * scalar, c1.g * scalar, c1.b * scalar);
+}
+Color divide(const Color &c1, const double scalar)
+{
+    return Color(c1.r / scalar, c1.g / scalar, c1.b / scalar);
+}
+
+bool isInView(const Camera *camera, Vec4 &v0, Vec4 &v1, Color &first, Color &second)
 {
     double dx = v1.x - v0.x;
     double dy = v1.y - v0.y;
     double dz = v1.z - v0.z;
+    Color dc = minusc(first, second);
     double left_t = (camera->left - v0.x) / dx;
     double right_t = (camera->right - v0.x) / dx;
     double top_t = (camera->top - v0.y) / dy;
@@ -215,10 +233,6 @@ bool isInView(const Camera *camera, Vec4 &v0, Vec4 &v1)
     double zmin = -1.0, zmax = 1.0;
     int __TL__ = 1, __TE__ = 0;
     bool visible = false;
-    if ((dx == 0 && xmin - v0.x > 0) || (dx == 0 && v0.y - xmax > 0) || (dy == 0 && ymin - v0.y > 0) || (dy == 0 && v0.y - ymax > 0) || (dz == 0 && zmin - v0.z > 0) || (dz == 0 && v0.z - zmax > 0))
-    {
-        return false;
-    }
     if (isVisible(dx, xmin - v0.x, __TE__, __TL__))
     {
         if (isVisible(-dx, v0.x - xmax, __TE__, __TL__))
@@ -237,12 +251,14 @@ bool isInView(const Camera *camera, Vec4 &v0, Vec4 &v1)
                                 v1.x = v0.x + dx * __TL__;
                                 v1.y = v0.y + dy * __TL__;
                                 v1.z = v0.z + dz * __TL__;
+                                second = addc(first, multc(dc, __TL__));
                             }
                             if (__TE__ > 0)
                             {
                                 v0.x = v0.x + dx * __TE__;
                                 v0.y = v0.y + dy * __TE__;
                                 v0.z = v0.z + dz * __TE__;
+                                first = addc(first, multc(dc, __TE__));
                             }
                         }
                     }
@@ -252,22 +268,36 @@ bool isInView(const Camera *camera, Vec4 &v0, Vec4 &v1)
     }
     return visible;
 }
-
+void perspevtiveDivide(Vec4 &v)
+{
+    v.x /= v.t;
+    v.y /= v.t;
+    v.z /= v.t;
+}
+void tranformLine(const Matrix4 *viewPortMatrix, Vec4 *linefirst, Vec4 *linesecond)
+{
+    (*linefirst) = multiplyMatrixWithVec4(*viewPortMatrix, *linefirst);
+    (*linesecond) = multiplyMatrixWithVec4(*viewPortMatrix, *linesecond);
+}
+void rasterize(vector<vector<Color> > &image, Vec4 &v1, Vec4 &v2, Color &c1, Color &c2)
+{
+    //
+}
 void Scene::forwardRenderingPipeline(Camera *camera)
 {
     // camera transformation
     Matrix4 *rotationMatrix = getCameraRotationMatrix(camera);
-    Matrix4 *cameraTranslationMatrix = getCameraTranslationMatrix(camera);
+    Matrix4 *cameraTranslationMatrix = getCameraTranslationMatrix(camera); // k
     Matrix4 totalTransformation = multiplyMatrixWithMatrix(*rotationMatrix, *cameraTranslationMatrix);
-    Matrix4 *viewPortMatrix = getViewPortMatrix(camera);
-    Matrix4 *projectionMatrix = projectionTypeSwitch(camera);
+    Matrix4 *viewPortMatrix = getViewPortMatrix(camera);      // k
+    Matrix4 *projectionMatrix = projectionTypeSwitch(camera); //k
 
     // model transformation
     for (int i = 0; i < meshes.size(); i++)
     {
         Mesh *mesh = meshes[i];
         Matrix4 modelTransformation = generateModelTranformation(mesh, translations, scalings, rotations);
-        Matrix4 cameraRelativeModel = multiplyMatrixWithMatrix(*cameraTranslationMatrix, modelTransformation);
+        Matrix4 cameraRelativeModel = multiplyMatrixWithMatrix(totalTransformation, modelTransformation);
         Matrix4 projectionModel = multiplyMatrixWithMatrix(*projectionMatrix, cameraRelativeModel);
         for (int j = 0; j < mesh->triangles.size(); j++)
         {
@@ -281,22 +311,42 @@ void Scene::forwardRenderingPipeline(Camera *camera)
             first_v = multiplyMatrixWithVec4(projectionModel, first_v);
             second_v = multiplyMatrixWithVec4(projectionModel, second_v);
             third_v = multiplyMatrixWithVec4(projectionModel, third_v);
+            Color *first_c = new Color(*colorsOfVertices[first_v.colorId - 1]);
+            Color *second_c = new Color(*colorsOfVertices[second_v.colorId - 1]);
+            Color *third_c = new Color(*colorsOfVertices[third_v.colorId - 1]);
+
             if (cullingEnabled && shouldCulled(first_v, second_v, third_v, camera->pos))
-            {
                 continue;
-            }
-            if (isInView(camera, first_v, second_v))
+            perspevtiveDivide(first_v);
+            perspevtiveDivide(second_v);
+            perspevtiveDivide(third_v);
+
+            Vec4 *line0_first = new Vec4(first_v);
+            Vec4 *line0_second = new Vec4(second_v);
+
+            Vec4 *line1_first = new Vec4(second_v);
+            Vec4 *line1_second = new Vec4(third_v);
+
+            Vec4 *line2_first = new Vec4(first_v);
+            Vec4 *line2_second = new Vec4(third_v);
+            tranformLine(viewPortMatrix, line0_first, line0_second);
+            tranformLine(viewPortMatrix, line1_first, line1_second);
+            tranformLine(viewPortMatrix, line2_first, line2_second);
+
+            if (isInView(camera, *line0_first, *line0_second, *first_c, *second_c))
             {
+                // drawLine
             }
-            if (isInView(camera, second_v, third_v))
+            if (isInView(camera, *line1_first, *line1_second, *second_c, *third_c))
             {
+                // drawLine
             }
-            if (isInView(camera, first_v, third_v))
+            if (isInView(camera, *line2_first, *line2_second, *first_c, *third_c))
             {
+                // drawLine
             }
         }
     }
-    // clip and culling
 
     // rasterization process
 }
@@ -582,61 +632,6 @@ int Scene::makeBetweenZeroAnd255(double value)
         return 0;
     return (int)(value);
 }
-void Scene::writeImageToPPMFile(Camera *camera)
-{
-    unsigned char *image = new unsigned char[camera->horRes * camera->verRes * 3];
-    int index = 0;
-    for (int j = camera->verRes - 1; j >= 0; j--)
-    {
-        for (int i = 0; i < camera->horRes; i++)
-        {
-            image[index++] = makeBetweenZeroAnd255(this->image[i][j].r);
-            image[index++] = makeBetweenZeroAnd255(this->image[i][j].g);
-            image[index++] = makeBetweenZeroAnd255(this->image[i][j].b);
-        }
-    }
-    write_ppm(camera->outputFileName.c_str(), image, camera->horRes, camera->verRes);
-}
-
-void write_ppm(const char *filename, unsigned char *data, int width, int height)
-{
-    FILE *outfile;
-
-    if ((outfile = fopen(filename, "w")) == NULL)
-    {
-        throw std::runtime_error("Error: The ppm file cannot be opened for writing.");
-    }
-
-    (void)fprintf(outfile, "P3\n%d %d\n255\n", width, height);
-
-    unsigned char color;
-    for (size_t j = 0, idx = 0; j < height; ++j)
-    {
-        for (size_t i = 0; i < width; ++i)
-        {
-            for (size_t c = 0; c < 3; ++c, ++idx)
-            {
-                color = data[idx];
-
-                if (i == width - 1 && c == 2)
-                {
-                    (void)fprintf(outfile, "%d", color);
-                }
-                else
-                {
-                    (void)fprintf(outfile, "%d ", color);
-                }
-            }
-        }
-
-        (void)fprintf(outfile, "\n");
-    }
-
-    (void)fclose(outfile);
-}
-/*
-Original one
-	Writes contents of image (Color**) into a PPM file.
 
 void Scene::writeImageToPPMFile(Camera *camera)
 {
@@ -661,7 +656,7 @@ void Scene::writeImageToPPMFile(Camera *camera)
     }
     fout.close();
 }
-*/
+
 /*
 	Converts PPM image in given path to PNG file, by calling ImageMagick's 'convert' command.
 	os_type == 1 		-> Ubuntu
